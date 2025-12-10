@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Robo Car – Cloud Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background:#111827; color:#e5e7eb; margin:0; }
+    header { padding:16px 20px; text-align:center; background:#020617; box-shadow:0 2px 6px rgba(0,0,0,0.5); }
+    h1 { margin:0; font-size:24px; }
+    main { padding:20px; max-width:900px; margin:0 auto; }
+
+    .tabs { display:flex; border-bottom:1px solid #1f2937; margin-bottom:16px; }
+    .tab-btn {
+      flex:1; padding:10px 0; text-align:center; cursor:pointer;
+      background:#020617; border:none; color:#9ca3af; font-size:14px;
+    }
+    .tab-btn.active { background:#111827; color:#e5e7eb; border-bottom:2px solid #2563eb; }
+
+    .tab-content { display:none; }
+    .tab-content.active { display:block; }
+
+    .card {
+      background:#1f2937; border-radius:10px; padding:16px; margin:12px 0;
+      box-shadow:0 4px 12px rgba(0,0,0,0.4);
+    }
+    .row { display:flex; flex-wrap:wrap; justify-content:space-between; gap:16px; }
+    .metric { flex:1 1 150px; }
+    .label { color:#9ca3af; font-size:13px; }
+    .value { font-size:22px; font-weight:bold; margin-top:4px; }
+    .badge-safe { display:inline-block; padding:2px 8px; border-radius:999px; background:#064e3b; color:#bbf7d0; font-size:11px; }
+    .badge-danger { display:inline-block; padding:2px 8px; border-radius:999px; background:#7f1d1d; color:#fecaca; font-size:11px; }
+
+    button {
+      padding:8px 12px; border:none; border-radius:6px; background:#2563eb;
+      color:white; cursor:pointer; font-size:14px; margin-right:8px; margin-top:6px;
+    }
+    button.secondary { background:#4b5563; }
+    button.danger { background:#dc2626; }
+    button:disabled { opacity:0.5; cursor:not-allowed; }
+
+    #log {
+      font-size:12px; background:#020617; padding:8px; border-radius:8px;
+      margin-top:8px; max-height:200px; overflow-y:auto; white-space:pre-wrap;
+      border:1px solid #1f2937;
+    }
+    canvas { background:#020617; border-radius:8px; padding:10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Smart Robo Car – Cloud Dashboard</h1>
+  </header>
+  <main>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="live">Live status & control</button>
+      <button class="tab-btn" data-tab="history">History analysis</button>
+    </div>
+
+    <!-- TAB 1: LIVE -->
+    <section id="tab-live" class="tab-content active">
+      <div class="card">
+        <h2 style="margin-top:0;">Current environment</h2>
+        <div class="row">
+          <div class="metric">
+            <div class="label">Temperature (°C)</div>
+            <div class="value" id="temp">--</div>
+          </div>
+          <div class="metric">
+            <div class="label">Humidity (%)</div>
+            <div class="value" id="hum">--</div>
+          </div>
+          <div class="metric">
+            <div class="label">Fire status</div>
+            <div class="value" id="fireStatus">--</div>
+          </div>
+          <div class="metric">
+            <div class="label">Last update</div>
+            <div class="value" id="time">--</div>
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <button onclick="loadLatest()">Refresh</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0;">LED control</h2>
+        <button onclick="ledControl('on')">LED ON</button>
+        <button class="secondary" onclick="ledControl('off')">LED OFF</button>
+      </div>
+      <div class="card">
+        <h2 style="margin-top:0;">RGB color picker</h2>
+        <p style="font-size:13px; color:#9ca3af;">
+          Choose any color and send it to the robot’s RGB LED.
+        </p>
+        <input type="color" id="colorPicker" value="#ffffff" style="width:80px; height:40px; border:none; padding:0; background:transparent;">
+        <button onclick="applyPickedColor()">Apply color</button>
+        <span id="colorPreviewText" style="font-size:13px; margin-left:8px; color:#9ca3af;"></span>
+      </div>
+
+
+      <div class="card">
+        <h2 style="margin-top:0;">Voice commands</h2>
+        <p style="font-size:14px;">
+          Try saying:
+          <em>"get status", "turn on light", "turn off light"</em>
+        </p>
+        <button id="voiceBtn" onclick="toggleVoice()">Start voice</button>
+        <p id="voiceStatus" style="font-size:13px; color:#9ca3af; margin-top:4px;">
+          Voice: idle
+        </p>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0;">Log</h2>
+        <div id="log"></div>
+      </div>
+    </section>
+
+    <!-- TAB 2: HISTORY -->
+    <section id="tab-history" class="tab-content">
+      <div class="card">
+        <h2 style="margin-top:0;">Temperature & humidity over time</h2>
+        <p style="font-size:13px; color:#9ca3af;">
+          Last 100 measurements from Supabase.
+        </p>
+        <button onclick="loadHistory()">Reload history</button>
+        <div style="margin-top:16px;">
+          <canvas id="historyChart" height="220"></canvas>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    // === CONFIG – EDIT THESE ===
+    const SUPABASE_URL = "https://szilduvgiobgpchdtaqv.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN6aWxkdXZnaW9iZ3BjaGR0YXF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUyODY3NzksImV4cCI6MjA4MDg2Mjc3OX0.8eToFEie1DueGobjdkeGuqDOyebJpVHTz_Yqn0jP1is";
+    const ESP_BASE_URL = "http://10.138.249.130";   // ESP8266 base URL for LED control
+
+    // === DOM ELEMENTS ===
+    const tempEl = document.getElementById('temp');
+    const humEl  = document.getElementById('hum');
+    const timeEl = document.getElementById('time');
+    const fireEl = document.getElementById('fireStatus');
+    const logEl  = document.getElementById('log');
+    const voiceBtn = document.getElementById('voiceBtn');
+    const voiceStatusEl = document.getElementById('voiceStatus');
+
+    function log(msg) {
+      const t = new Date().toLocaleTimeString();
+      logEl.textContent += `[${t}] ${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // === TAB SWITCHING ===
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      });
+    });
+
+    // === SUPABASE REST HELPERS ===
+    async function loadLatest() {
+      log("Loading latest measurement from Supabase...");
+      const url = `${SUPABASE_URL}/rest/v1/measurements?select=*&order=created_at.desc&limit=1`;
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: {
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+            "Content-Type": "application/json"
+          }
+        });
+        log(`HTTP latest status: ${res.status}`);
+        if (!res.ok) {
+          const text = await res.text();
+          log("Error body: " + text);
+          return;
+        }
+        const data = await res.json();
+        if (!data || data.length === 0) {
+          log("No data in table yet.");
+          return;
+        }
+        const row = data[0];
+
+        tempEl.textContent = row.temperature != null ? Number(row.temperature).toFixed(1) : "--";
+        humEl.textContent  = row.humidity != null ? Number(row.humidity).toFixed(1) : "--";
+        timeEl.textContent = row.created_at ? new Date(row.created_at).toLocaleString() : "--";
+
+        const isFire = row.fire === true;
+        fireEl.innerHTML = isFire
+          ? '<span class="badge-danger">FIRE DETECTED</span>'
+          : '<span class="badge-safe">Safe</span>';
+
+        log(`Latest OK: T=${row.temperature}, H=${row.humidity}, fire=${row.fire}, at ${row.created_at}`);
+      } catch (err) {
+        log("Fetch latest error: " + err);
+      }
+    }
+
+    let historyChart = null;
+
+    async function loadHistory() {
+      log("Loading history from Supabase...");
+      const url = `${SUPABASE_URL}/rest/v1/measurements?select=created_at,temperature,humidity&order=created_at.asc&limit=100`;
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: {
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+            "Content-Type": "application/json"
+          }
+        });
+        log(`HTTP history status: ${res.status}`);
+        if (!res.ok) {
+          const text = await res.text();
+          log("History error body: " + text);
+          return;
+        }
+        const data = await res.json();
+        if (!data || data.length === 0) {
+          log("No history rows yet.");
+          return;
+        }
+
+        const labels = data.map(r => new Date(r.created_at).toLocaleTimeString());
+        const temps  = data.map(r => Number(r.temperature));
+        const hums   = data.map(r => Number(r.humidity));
+
+        const ctx = document.getElementById('historyChart').getContext('2d');
+        if (historyChart) {
+          historyChart.destroy();
+        }
+        historyChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Temperature (°C)',
+                data: temps,
+                borderWidth: 2,
+                tension: 0.2
+              },
+              {
+                label: 'Humidity (%)',
+                data: hums,
+                borderWidth: 2,
+                tension: 0.2
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: {
+                labels: { color: '#e5e7eb' }
+              }
+            },
+            scales: {
+              x: {
+                ticks: { color: '#9ca3af', maxRotation: 45, minRotation: 45 },
+                grid: { color: '#1f2937' }
+              },
+              y: {
+                ticks: { color: '#9ca3af' },
+                grid: { color: '#1f2937' }
+              }
+            }
+          }
+        });
+
+        log(`History loaded: ${data.length} points.`);
+      } catch (err) {
+        log("Fetch history error: " + err);
+      }
+    }
+
+    // === LED CONTROL via ESP REST ===
+    async function ledControl(state) {
+      const path = state === 'on' ? '/lightOn' : '/lightOff';
+      const url = ESP_BASE_URL + path;
+      log(`LED control: GET ${url}`);
+      try {
+        const res = await fetch(url);
+        const text = await res.text();
+        log(`LED response: [${res.status}] ${text}`);
+      } catch (err) {
+        log("LED fetch error: " + err);
+      }
+    }
+
+    // === VOICE CONTROL ===
+    let recognition = null;
+    let listening = false;
+
+    function initVoice() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        log("Web Speech API not supported in this browser.");
+        voiceStatusEl.textContent = "Voice: not supported in this browser";
+        voiceBtn.disabled = true;
+        return;
+      }
+
+      recognition = new SpeechRecognition();
+      recognition.lang = 'en-US';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        listening = true;
+        voiceBtn.textContent = "Stop voice";
+        voiceStatusEl.textContent = "Voice: listening...";
+        log("Voice recognition started");
+      };
+
+      recognition.onend = () => {
+        listening = false;
+        voiceBtn.textContent = "Start voice";
+        voiceStatusEl.textContent = "Voice: idle";
+        log("Voice recognition stopped");
+      };
+
+      recognition.onerror = (event) => {
+        log("Voice error: " + event.error);
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript.toLowerCase();
+        log(`Heard: "${transcript}"`);
+        voiceStatusEl.textContent = `Heard: "${transcript}"`;
+        handleVoiceCommand(transcript);
+      };
+    }
+
+    function toggleVoice() {
+      if (!recognition) {
+        initVoice();
+        if (!recognition) return;
+      }
+      if (!listening) {
+        recognition.start();
+      } else {
+        recognition.stop();
+      }
+    }
+
+    function handleVoiceCommand(text) {
+      const t = text.toLowerCase();
+      if (t.includes("status") || t.includes("temperature") || t.includes("humidity")) {
+        loadLatest();
+        return;
+      }
+      if (t.includes("turn on light") || t.includes("light on")) {
+        ledControl('on');
+        return;
+      }
+      if (t.includes("turn off light") || t.includes("light off")) {
+        ledControl('off');
+        return;
+      }
+      log("No matching voice command.");
+    }
+
+    // === INIT ON LOAD ===
+    window.onload = () => {
+      initVoice();
+      loadLatest();
+      loadHistory();
+    };
+    const colorPicker = document.getElementById('colorPicker');
+    const colorPreviewText = document.getElementById('colorPreviewText');
+
+    function hexToRgb(hex) {
+      let h = hex.replace('#', '');
+      if (h.length === 3) {
+        h = h.split('').map(c => c + c).join('');
+      }
+      const num = parseInt(h, 16);
+      return {
+        r: (num >> 16) & 255,
+        g: (num >> 8) & 255,
+        b: num & 255
+      };
+    }
+
+    async function sendSetColor(r, g, b) {
+      const url = `${ESP_BASE_URL}/setColor?r=${r}&g=${g}&b=${b}`;
+      log(`SetColor: GET ${url}`);
+      try {
+        const res = await fetch(url);
+        const text = await res.text();
+        log(`SetColor resp [${res.status}]: ${text}`);
+      } catch (err) {
+        log("SetColor error: " + err);
+      }
+    }
+
+    async function applyPickedColor() {
+      const { r, g, b } = hexToRgb(colorPicker.value);
+      colorPreviewText.textContent = `R:${r} G:${g} B:${b}`;
+      await sendSetColor(r, g, b);
+    }
+
+  </script>
+</body>
+</html>
